@@ -44,19 +44,24 @@ Recommended (and used):
 
 ## Repository Layout
 
+```
 nrf24-joystick-motor-l293d/
 ├─ README.md
 ├─ sketches/
-│ ├─ 01_motor_only_l293d/
-│ │ └─ 01_motor_only_l293d.ino
-│ ├─ 02_radio_tx_joystick/
-│ │ └─ 02_radio_tx_joystick.ino
-│ ├─ 02_radio_rx_print/
-│ │ └─ 02_radio_rx_print.ino
-│ └─ 03_radio_rx_drive_motor/
-│ └─ 03_radio_rx_drive_motor.ino
+│  ├─ 01_motor_only_l293d/
+│  │  └─ 01_motor_only_l293d.ino
+│  ├─ 02_radio_tx_joystick/
+│  │  └─ 02_radio_tx_joystick.ino
+│  ├─ 02_radio_rx_print/
+│  │  └─ 02_radio_rx_print.ino
+│  └─ 03_radio_rx_drive_motor/
+│     └─ 03_radio_rx_drive_motor.ino
 ├─ docs/
 └─ assets/
+```
+
+Each sketch folder is self-contained and represents one bring-up stage.
+
 
 
 Each sketch folder is self-contained and represents one bring-up stage.
