@@ -1,3 +1,10 @@
+// 03_radio_rx_drive_motor.ino
+// Stage 3: nRF24 receiver drives DC motor via L293D from joystick input
+// Design intent:
+//   - Joystick Y (forward/back) controls SPEED (faster/slower)
+//   - Joystick X (left/right) selects DIRECTION (latched)
+//   - Failsafe: if radio packets stop, motor stops
+
 #include <SPI.h>
 #include <RF24.h>
 
@@ -13,16 +20,19 @@ struct Payload {
 
 // ---------------- Motor (L293D) ----------------
 // Match these to your working motor-only wiring:
-const uint8_t PIN_EN  = 5;  // PWM
-const uint8_t PIN_IN1 = 4;
-const uint8_t PIN_IN2 = 3;
+const uint8_t PIN_EN  = 5;  // PWM (L293D pin 1 EN1,2)
+const uint8_t PIN_IN1 = 4;  // L293D pin 2 IN1
+const uint8_t PIN_IN2 = 3;  // L293D pin 7 IN2
 
 // ---------------- Control tuning ----------------
-const int DEAD_X = 80;           // direction deadband (left/right)
-const int DEAD_Y = 40;           // speed deadband (forward/back)
+const int DEAD_X = 60;               // direction selection deadband (left/right)
+const int DEAD_Y = 40;               // speed deadband (forward/back)
 const unsigned long FAILSAFE_MS = 400;
 
 unsigned long lastRxMs = 0;
+
+// Latched direction: updated only when X is pushed past DEAD_X
+int8_t lastDir = +1;                 // default direction on startup (+1 or -1)
 
 void motorStopCoast() {
   digitalWrite(PIN_IN1, LOW);
@@ -31,15 +41,21 @@ void motorStopCoast() {
 }
 
 void motorDrive(int8_t dir, uint8_t pwm) {
-  if (dir == 0 || pwm == 0) {
+  if (pwm == 0) {                     // speed=0 always stops motor
     motorStopCoast();
     return;
   }
 
-  if (dir > 0) {
+  // If direction is ever 0 (shouldn't be after latching), coast
+  if (dir == 0) {
+    motorStopCoast();
+    return;
+  }
+
+  if (dir > 0) {                      // "forward"
     digitalWrite(PIN_IN1, HIGH);
     digitalWrite(PIN_IN2, LOW);
-  } else {
+  } else {                            // "reverse"
     digitalWrite(PIN_IN1, LOW);
     digitalWrite(PIN_IN2, HIGH);
   }
@@ -48,10 +64,9 @@ void motorDrive(int8_t dir, uint8_t pwm) {
 }
 
 uint8_t mapJoyToPwm(int16_t y) {
-  int v = abs(y);
+  int v = abs(y);                     // speed is magnitude of Y
   if (v < DEAD_Y) return 0;
   v = constrain(v, DEAD_Y, 512);
-  // Map from [DEAD_Y..512] to [0..255]
   return (uint8_t)map(v, DEAD_Y, 512, 0, 255);
 }
 
@@ -90,16 +105,21 @@ void loop() {
     }
     lastRxMs = millis();
 
+    // Speed from Y
     uint8_t pwm = mapJoyToPwm(p.y);
-    int8_t dir  = joyToDir(p.x);
 
-    motorDrive(dir, pwm);
+    // Direction from X (latched)
+    int8_t newDir = joyToDir(p.x);
+    if (newDir != 0) lastDir = newDir;
 
-    // Debug (optional)
+    // Drive motor using latched direction and current speed
+    motorDrive(lastDir, pwm);
+
+    // Debug
     Serial.print("seq="); Serial.print(p.seq);
-    Serial.print(" x="); Serial.print(p.x);
-    Serial.print(" y="); Serial.print(p.y);
-    Serial.print(" dir="); Serial.print((int)dir);
+    Serial.print(" x=");  Serial.print(p.x);
+    Serial.print(" y=");  Serial.print(p.y);
+    Serial.print(" dir="); Serial.print((int)lastDir);
     Serial.print(" pwm="); Serial.println(pwm);
   }
 
