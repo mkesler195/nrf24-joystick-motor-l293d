@@ -1,11 +1,12 @@
 // 05_radio_rx_drive_motor_and_stepper.ino
-// Stage 4: nRF24 receiver drives DC motor via L293D AND steering stepper via ULN2003
+// Stage 5: nRF24 receiver drives DC motor via L293D AND steering stepper via ULN2003
 // Design intent:
 //   - Joystick Y (forward/back) controls DC motor DIRECTION + SPEED
 //   - Joystick X (left/right) controls STEPPER steering (keeps stepping while held)
 //   - Joystick centered: motor STOP (coast), stepper HOLD
 //   - Failsafe: if radio packets stop, motor stops, stepper holds
 //   - Soft steering limits prevent over-rotation
+//   - Progressive steering: more stick deflection => faster steering steps (non-linear ramp)
 
 #include <SPI.h>
 #include <RF24.h>
@@ -49,10 +50,14 @@ const int DEAD_X = 60;                 // steering deadband (left/right)
 const int DEAD_Y = 40;                 // motor deadband (forward/back)
 const unsigned long FAILSAFE_MS = 400;
 
-// Stepper steering behavior
-const unsigned long STEP_INTERVAL_MS = 3;  // ms between half-steps (3 felt good in your test)
-const int16_t STEER_MIN = -800;            // soft limit (half-steps)
-const int16_t STEER_MAX = +800;            // soft limit (half-steps)
+// Progressive steering timing (ms per half-step)
+// Bigger spread = more noticeable progression.
+const unsigned long STEER_INTERVAL_SLOW_MS = 14;  // near-deadband precision
+const unsigned long STEER_INTERVAL_FAST_MS = 1;   // hard-over fastest
+
+// Soft steering limits (half-steps)
+const int16_t STEER_MIN = -800;
+const int16_t STEER_MAX = +800;
 
 unsigned long lastRxMs = 0;
 
@@ -109,9 +114,34 @@ int8_t joyToSteerDir(int16_t x) {
   return (x > 0) ? +1 : -1;
 }
 
-void stepperService(unsigned long nowMs) {
+// Non-linear progressive steering: squared curve.
+// This makes it feel *more* progressive than a simple linear map.
+unsigned long steeringIntervalFromX(int16_t x) {
+  long mag = abs(x);
+  mag = constrain(mag, (long)DEAD_X, 512L);
+
+  // Normalize to 0..1000
+  long t = (mag - (long)DEAD_X) * 1000L / (512L - (long)DEAD_X);
+
+  // Square for non-linear ramp: stays slow longer, speeds up more near the end
+  long t2 = (t * t) / 1000L; // still 0..1000
+
+  long slow = (long)STEER_INTERVAL_SLOW_MS;
+  long fast = (long)STEER_INTERVAL_FAST_MS;
+
+  // Interpolate: interval = slow - (slow-fast)*t2
+  long interval = slow - ((slow - fast) * t2) / 1000L;
+
+  if (interval < fast) interval = fast;
+  if (interval > slow) interval = slow;
+  return (unsigned long)interval;
+}
+
+void stepperService(unsigned long nowMs, int16_t xValue) {
   if (steerDir == 0) return;
-  if (nowMs - lastStepMs < STEP_INTERVAL_MS) return;
+
+  unsigned long dynamicInterval = steeringIntervalFromX(xValue);
+  if (nowMs - lastStepMs < dynamicInterval) return;
 
   // Soft limits
   if (steerDir > 0 && steerPos >= STEER_MAX) return;
@@ -137,7 +167,7 @@ void failsafeStop() {
 // ---------------- Setup / loop ----------------
 void setup() {
   Serial.begin(115200);
-  Serial.println("Stage 4 RX motor + stepper starting");
+  // Serial.println("Stage 5 RX motor + stepper starting (aggressive progressive steering)");
 
   // Motor pins
   pinMode(PIN_EN, OUTPUT);
@@ -161,10 +191,11 @@ void setup() {
   radio.startListening();
 
   lastRxMs = millis();
-  Serial.println("Stage 4 RX ready");
+  // Serial.println("Stage 5 RX ready");
 }
 
 void loop() {
+  static Payload lastP = {0, 0, 0};        // keep last packet so steering can keep using last X
   Payload p;
   unsigned long nowMs = millis();
 
@@ -178,6 +209,7 @@ void loop() {
   }
 
   if (got) {
+    lastP = p;
     lastRxMs = nowMs;
 
     // Motor from Y (signed)
@@ -186,13 +218,13 @@ void loop() {
     // Steering from X (while held)
     steerDir = joyToSteerDir(p.x);
 
-    // Debug
-    Serial.print("seq="); Serial.print(p.seq);
-    Serial.print(" x=");  Serial.print(p.x);
-    Serial.print(" y=");  Serial.print(p.y);
-    Serial.print(" steerDir="); Serial.print((int)steerDir);
-    Serial.print(" steerPos="); Serial.print(steerPos);
-    Serial.println();
+    // Debug (commented out to avoid slowing loop timing)
+    // Serial.print("seq="); Serial.print(p.seq);
+    // Serial.print(" x=");  Serial.print(p.x);
+    // Serial.print(" y=");  Serial.print(p.y);
+    // Serial.print(" steerDir="); Serial.print((int)steerDir);
+    // Serial.print(" steerPos="); Serial.print(steerPos);
+    // Serial.print(" interval="); Serial.println(steeringIntervalFromX(p.x));
   }
 
   // Failsafe: if link drops, stop motor & hold steering
@@ -201,5 +233,6 @@ void loop() {
   }
 
   // Non-blocking stepper update (always runs)
-  stepperService(nowMs);
+  // Use lastP.x so steering continues smoothly between packets
+  stepperService(nowMs, lastP.x);
 }
